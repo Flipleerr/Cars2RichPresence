@@ -1,0 +1,19 @@
+[package]
+name = "Cars2RichPresence"
+version = "0.1.0"
+edition = "2021"
+
+build = "build.rs"
+links = "Pentane"
+
+[dependencies]
+discord-presence = "2.1"
+libc = "0.2"
+log = { version = "0.4", features = ["std"] }
+sunset-rs = { git = "https://github.com/itsmeft24/sunset.git", branch = "x64-support" }
+
+[patch."https://github.com/svark/detours.git"]
+detours-sys = { git = "https://github.com/Flipleerr/detours.git" } 
+
+[lib]
+crate-type = ["dylib"]
