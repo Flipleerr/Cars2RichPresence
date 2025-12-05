@@ -1,8 +1,8 @@
 use crate::pentane::log_message;
-use discord_presence::models::RpcServerConfiguration;
+use discord_presence::client;
 use pentane::{PentaneSemVer, PentaneUUID, PluginInformation};
 use std::sync::Mutex;
-use std::sync::mpsc::{channel, Sender, Receiver};
+use std::sync::mpsc::{Receiver, RecvError, Sender, channel};
 use std::{time::Duration, thread};
 use discord_presence::{Client, models::ActivityType};
 use sunset_rs::*;
@@ -51,7 +51,7 @@ pub fn init_rpc(){
 }
 
 fn update_rpc(client: &mut Client, in_frontend: bool, current_level: String) {
-    if in_frontend {
+    if in_frontend == true {
         client.set_activity(|act| {
             act.state("In Menus")
                 .activity_type(ActivityType::Playing)
@@ -59,36 +59,36 @@ fn update_rpc(client: &mut Client, in_frontend: bool, current_level: String) {
     } else {
         client.set_activity(|act| {
             act.state("In Race - [Mode]")
-                .activity_type(ActivityType::Playing);
-            act.details(current_level)
+                .activity_type(ActivityType::Playing)
+                .details(current_level)
         });
     }
 }
 
 fn spawn_worker(rx: Receiver<RPCEvent>) {
     thread::spawn(move || {
-        println!("[RichPresence] Spawned worker thread");
-
+        println!("[RichPresence] Spawned worker thread!");
         init_rpc();
+        let mut locked = RPC.lock().unwrap();
 
         loop {
-            if let Ok(event) = rx.recv() {
-                println!("[RichPresence] Received event");
-
-                let mut locked = RPC.lock().unwrap();
-                if let Some(client) = locked.as_mut() {
-                    match event {
-                        // HACK HACK HACK
-                        RPCEvent::InFrontend(frontend) => {
-                            update_rpc(client, frontend, "".to_string());
-                        }
-                        RPCEvent::CurrentLevel(current_level) => {
-                            update_rpc(client, false, current_level);
+            match rx.recv() {
+                Ok(event) => {
+                    if let Some(client) = locked.as_mut() {
+                        match event {
+                            RPCEvent::InFrontend(in_frontend) => {
+                                update_rpc(client, in_frontend, "".to_string());
+                            }
+                            RPCEvent::CurrentLevel(current_level) => {
+                                update_rpc(client, false, current_level); // passing dummies for now
+                            }
                         }
                     }
-                }
+                },
+                Err(e) => println!("Failed to receive event: {:?}", e),
             }
         }
+        
     });
 }
 
@@ -100,6 +100,8 @@ pub extern "thiscall" fn carsfrontend_setlevel_hook(this: *mut (), level: *const
             let _ = tx.lock().unwrap().send(RPCEvent::CurrentLevel(current_level));
         }
     }
+
+    original!()(this, level);
 }
 
 #[sunset_rs::hook(offset = 0x00e9dd40)]
@@ -126,6 +128,6 @@ extern "C" fn Pentane_Main() {
 
     spawn_worker(rx);
 
-    sunset_rs::install_hooks!(frontend_infrontend_hook);
+    sunset_rs::install_hooks!(frontend_infrontend_hook, carsfrontend_setlevel_hook);
     println!("[RichPresence] Installed hooks");
 }
