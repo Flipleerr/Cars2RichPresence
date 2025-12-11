@@ -28,9 +28,16 @@ pub static Pentane_PluginDependencyCount: usize = 0;
 
 #[derive(Debug)]
 pub enum RPCEvent {
-    CurrentLevel(String),
     InFrontend(bool),
+    CurrentLevel(String),
 }
+
+#[derive(Default)]
+pub struct RPCState {
+    in_frontend: bool,
+    current_level: String,
+}
+
 static EVENT_TX: OnceCell<Sender<RPCEvent>> = OnceCell::new();
 
 fn init_rpc() -> Client {
@@ -47,57 +54,55 @@ fn init_rpc() -> Client {
 }
 
 fn update_rpc(client: &mut Client, in_frontend: bool, current_level: &String) {
-    if in_frontend || current_level.is_empty() {
-        match client.set_activity(|act| {
+    let result = if in_frontend || current_level.is_empty() {
+        client.set_activity(|act| {
         act.state("In Menus")
             .activity_type(ActivityType::Playing)
-        }) {
-            Ok(act) => println!("[RichPresence] Successfully set activity"),
-            Err(e) => println!("[RichPresence] Failed to set activity {:?}", e)
-        };
+        })
     } else {
         client.set_activity(|act| {
         act.state("In Race - [Mode]")
             .activity_type(ActivityType::Playing)
             .details(current_level)
-        });
+        })
+    };
+
+    match result {
+        Ok(_) => println!("[RichPresence] Successfully set activity"),
+        Err(e) => eprintln!("[RichPresence] Failed to set activity {:?}", e),
     }
 }
 
 fn spawn_worker(rx: Receiver<RPCEvent>) {
-    thread::spawn(move || {
-        println!("[RichPresence] Spawned worker thread");
-        let mut client = init_rpc();
-        let mut last_frontend_state = true;
-        let mut last_level_state = String::new();
+    println!("[RichPresence] Spawned worker thread");
+    let mut state = RPCState::default();
 
+    thread::spawn(move || {
+        let mut client = init_rpc();
         loop {
             println!("[RichPresence] Waiting...");
-            match rx.recv() {
+            match rx.recv_timeout(Duration::from_millis(100)){
                 Ok(event) => {
                     println!("[RichPresence] Received an event! {:?}", event);
                     match event {
                         RPCEvent::InFrontend(frontend) => {
-                            last_frontend_state = frontend;
+                            state.in_frontend = frontend;
                         }
                         RPCEvent::CurrentLevel(current_level) => {
-                            last_level_state = current_level;
+                            state.current_level = current_level;
                         }
                     }
-
-                    println!("[RichPresence] Current state: is in frontend - {}, current level - {}", last_frontend_state, last_level_state);
-                    update_rpc(&mut client, last_frontend_state, &last_level_state);
-
-                    thread::sleep(Duration::from_millis(1500));
+                    update_rpc(&mut client, state.in_frontend, &state.current_level);
                 }
-
-                Err(e) => {
-                    println!("Failed to receive event! {:?} Exiting worker thread", e);
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    // do nothing! this is normal
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    println!("[RichPresence] Sender disconnected. Exiting update thread");
                     break;
                 }
             }
         }
-        println!("[RichPresence] Worker thread has closed");
     });
 }
 
@@ -127,7 +132,7 @@ pub extern "thiscall" fn frontend_infrontend_hook(this_ptr: *mut ()) -> u8 {
             let result = tx.send(RPCEvent::InFrontend(value));
 
             match result {
-                Ok(()) => println!("[RichPresence] Detected frontend state {}! Sending event", value),
+                Ok(()) => (),
                 Err(e) => println!("[RichPresence] Failed to send event: {:?}", e)
             }
         }
