@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "discord-presence",
  "libc",
+ "once_cell",
  "sunset-rs",
  "winapi",
 ]
