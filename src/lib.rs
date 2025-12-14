@@ -5,7 +5,7 @@ use pentane::{PentaneSemVer, PentaneUUID, PluginInformation};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::{time::Duration, thread};
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::{CStr};
 use discord_presence::models::ActivityAssets;
 use once_cell::sync::OnceCell;
 
@@ -32,7 +32,7 @@ pub static Pentane_PluginDependencyCount: usize = 0;
 pub enum RPCEvent {
     InFrontend(bool),
     CurrentLevel(String),
-    // MissionMode(String), unused
+    MissionMode(String),
 }
 
 #[derive(Default)]
@@ -54,7 +54,7 @@ fn map_level_names() -> &'static HashMap<&'static str, &'static str> {
         map.insert("TRACK_B_TokyoXtreme", "Vista Run");
         map.insert("TRACK_C_TokyoXtreme", "Imperial Tour");
         map.insert("TRACK_A_Air", "Terminal Sprint");
-        map.insert("TRACK_B_Air", "Runway Tour");
+        map.insert("TRACK_C_Air", "Runway Tour");
         map.insert("TRACK_A_Italy", "Harbor Sprint");
         map.insert("TRACK_B_Italy", "Mountain Run");
         map.insert("TRACK_C_Italy", "Casino Tour");
@@ -63,12 +63,13 @@ fn map_level_names() -> &'static HashMap<&'static str, &'static str> {
         map.insert("TRACK_A_RadiatorSprings", "Radiator Sprint");
         map.insert("TRACK_B_RadiatorSprings", "Canyon Run");
         map.insert("TRACK_C_RadiatorSprings", "Timberline Sprint");
-        map.insert("MI_Oil", "Oil Rig Arena");
-        map.insert("MI_Air", "Airport Arena");
-        map.insert("MI_Italy", "Italy Arena");
-        map.insert("MI_London", "London Arena");
-        map.insert("MI_Tokyo", "Tokyo Arena");
-        map.insert("MI_Radiator", "Radiator Springs Arena");
+        map.insert("Location_MI_Oil", "Oil Rig Arena");
+        map.insert("Location_MI_Air", "Airport Arena");
+        map.insert("Location_MI_Italy", "Italy Arena");
+        map.insert("Location_MI_London", "London Arena");
+        map.insert("Location_MI_Tokyo", "Tokyo Arena");
+        map.insert("Location_MI_Radiator", "Radiator Springs Arena");
+        map.insert("", "");
         map
     })
 }
@@ -95,8 +96,7 @@ fn init_rpc() -> Client {
     client
 }
 
-
-fn update_rpc(client: &mut Client, in_frontend: bool, current_level: &String) {
+fn update_rpc(client: &mut Client, in_frontend: bool, current_level: &String, mission_mode: &String) {
     let result = if in_frontend || current_level.is_empty() {
         client.set_activity(|act| {
             act.state("In Menus")
@@ -105,7 +105,7 @@ fn update_rpc(client: &mut Client, in_frontend: bool, current_level: &String) {
     } else {
         client.set_activity(|act| {
             let mut assets = ActivityAssets::new();
-            act.state("In Race - [Mode]")
+            act.state(format!("In {}", mission_mode))
                 .activity_type(ActivityType::Playing)
                 .details(get_display_name(current_level))
                 .assets(|_|
@@ -136,8 +136,11 @@ fn spawn_worker(rx: Receiver<RPCEvent>) {
                         RPCEvent::CurrentLevel(current_level) => {
                             state.current_level = current_level;
                         }
+                        RPCEvent::MissionMode(mission_mode) => {
+                            state.mission_mode = mission_mode;
+                        }
                     }
-                    update_rpc(&mut client, state.in_frontend, &state.current_level);
+                    update_rpc(&mut client, state.in_frontend, &state.current_level, &state.mission_mode);
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     // do nothing! this is normal
@@ -171,7 +174,6 @@ pub extern "thiscall" fn carsfrontend_exit_hook(this: *mut ()) {
     original!()(this);
 }
 
-
 #[sunset_rs::hook(offset = 0x004c0440)]
 pub extern "thiscall" fn carsfrontend_setlevel_hook(this: *mut (), level: *const std::os::raw::c_char) {
     unsafe {
@@ -186,6 +188,28 @@ pub extern "thiscall" fn carsfrontend_setlevel_hook(this: *mut (), level: *const
     original!()(this, level);
 }
 
+#[sunset_rs::hook(offset = 0x004e7f50)]
+pub extern "stdcall" fn getmissionmodefromname_hook(mission_mode: *const std::os::raw::c_char) -> i32 {
+    let mode: i32 = original!()(mission_mode);
+    if mission_mode.is_null() {
+        println!("[RichPresence] GetMissionModeFromName called with NULL pointer.");
+        return mode;
+    }
+
+    unsafe {
+        if let Some(tx) = EVENT_TX.get() {
+            let mode_string = CStr::from_ptr(mission_mode)
+                .to_string_lossy()
+                .into_owned();
+            if let Err(error) = tx.send(RPCEvent::MissionMode(mode_string)) {
+                println!("[RichPresence] Failed to send event {:?}", error);
+            }
+        }
+    }
+
+    mode
+}
+
 #[unsafe(no_mangle)]
 extern "C" fn Pentane_Main() {
     let (tx, rx) = channel::<RPCEvent>();
@@ -195,7 +219,8 @@ extern "C" fn Pentane_Main() {
     sunset_rs::install_hooks!(
 		carsfrontend_enter_hook,
 		carsfrontend_exit_hook,
-        carsfrontend_setlevel_hook
+        carsfrontend_setlevel_hook,
+        getmissionmodefromname_hook,
     );
     println!("[RichPresence] Installed hooks!");
 }
