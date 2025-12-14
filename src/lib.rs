@@ -44,6 +44,7 @@ pub struct RPCState {
 
 static EVENT_TX: OnceCell<Sender<RPCEvent>> = OnceCell::new();
 static LEVEL_MAP: OnceCell<HashMap<&'static str, &'static str>> = OnceCell::new();
+static MODE_MAP: OnceCell<HashMap<&'static str, &'static str>> = OnceCell::new();
 
 fn map_level_names() -> &'static HashMap<&'static str, &'static str> {
     LEVEL_MAP.get_or_init(|| {
@@ -64,7 +65,7 @@ fn map_level_names() -> &'static HashMap<&'static str, &'static str> {
         map.insert("TRACK_B_RadiatorSprings", "Canyon Run");
         map.insert("TRACK_C_RadiatorSprings", "Timberline Sprint");
         map.insert("Location_MI_Oil", "Oil Rig Arena");
-        map.insert("Location_MI_Air", "Airport Arena");
+        map.insert("Location_MI_AIR", "Airport Arena");
         map.insert("Location_MI_Italy", "Italy Arena");
         map.insert("Location_MI_London", "London Arena");
         map.insert("Location_MI_Tokyo", "Tokyo Arena");
@@ -74,8 +75,32 @@ fn map_level_names() -> &'static HashMap<&'static str, &'static str> {
     })
 }
 
+fn map_mode_names() -> &'static HashMap<&'static str, &'static str> {
+    MODE_MAP.get_or_init(|| {
+        let mut map = HashMap::new();
+        map.insert("RACE", "Race");
+        map.insert("BATTLE_RACE", "Battle Race");
+        map.insert("TAKEDOWN", "Attack");
+        map.insert("COLLECT", "Survival");
+        map.insert("HUNTER", "Hunter");
+        map.insert("ARENA", "Arena");
+        map.insert("BOMB", "Disruptor");
+        map.insert("", "");
+        map
+    })
+}
+
 pub fn get_display_name(internal_name: &str) -> String {
     let mut map = map_level_names();
+
+    match map.get(internal_name) {
+        Some(display_name) => display_name.to_string(),
+        None => format!("Unknown level {}", internal_name),
+    }
+}
+
+pub fn get_mode_name(internal_name: &str) -> String {
+    let mut map = map_mode_names();
 
     match map.get(internal_name) {
         Some(display_name) => display_name.to_string(),
@@ -105,11 +130,13 @@ fn update_rpc(client: &mut Client, in_frontend: bool, current_level: &String, mi
     } else {
         client.set_activity(|act| {
             let mut assets = ActivityAssets::new();
-            act.state(format!("In {}", mission_mode))
+            let image_key = current_level.trim_start_matches("Location_").to_string().to_lowercase();
+            act.state(format!("In {}", get_mode_name(mission_mode)))
                 .activity_type(ActivityType::Playing)
                 .details(get_display_name(current_level))
                 .assets(|_|
-                    assets.large_image(current_level.to_lowercase()))
+                    assets.large_image(image_key)
+                )
         })
     };
 
